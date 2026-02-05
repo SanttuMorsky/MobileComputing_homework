@@ -42,26 +42,53 @@ import androidx.navigation.compose.rememberNavController
 import androidx.compose.material3.Button
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.ui.Alignment
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import coil.compose.AsyncImage
+import android.net.Uri
+import android.content.Context
+import java.io.File
+import java.io.FileOutputStream
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.material3.TextField
 
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        // Haetaan asetettu nimi
+        val sharedPref = getPreferences(Context.MODE_PRIVATE)
+        val savedName = sharedPref.getString("user_name", "Lexi") ?: "Lexi"
+        val file = File(filesDir, "profile_pic.jpg")
+        val savedUri = if (file.exists()) Uri.fromFile(file) else null
+
         setContent {
             ComposeTutorialTheme {
-                AppNavigation()
+                // Annetaan naville tiedot
+                AppNavigation(initialName = savedName, initialUri = savedUri)
             }
+        }
+    }
+    fun saveName(name: String) {
+        val sharedPref = getPreferences(Context.MODE_PRIVATE)
+        with(sharedPref.edit()) {
+            putString("user_name", name)
+            apply()
         }
     }
 }
 @Composable
-fun AppNavigation() {
+fun AppNavigation(initialName: String, initialUri: Uri?) {
     val navController = rememberNavController()
+    val context = LocalContext.current as MainActivity
+    var userName by remember { mutableStateOf(initialName) }
+    var userImageUri by remember { mutableStateOf(initialUri) }
 
     NavHost(navController = navController, startDestination = "Keskustelupalsta") {
-
-        // Ensimmäinen näkymä - HW1:sen keskustelulista
+        //Ensimmäinen tai "pää"näkymä joka on aluksi tehty keskustelupalsta
         composable("Keskustelupalsta") {
             Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                 Column(modifier = Modifier.padding(innerPadding)) {
@@ -69,39 +96,59 @@ fun AppNavigation() {
                         onClick = { navController.navigate("Profiili") },
                         modifier = Modifier.padding(16.dp)
                     ) {
-                        Text("Profile")
+                        Text("Edit Profile")
                     }
-                    Conversation(SampleData.conversationSample)
+                    Conversation(userName, userImageUri)
                 }
             }
         }
-
-        // Toinen näkymä "Oma profiili" josta takaisin paluu vie "main" screeniin elikkä hw1:sen ruutuun
+        // Toinen näkymä - Oma profiili
         composable("Profiili") {
-            ProfileScreen(onBack = {
-                navController.navigate("Keskustelupalsta") {
-                    popUpTo("Keskustelupalsta") { inclusive = true }
+            ProfileScreen(
+                currentName = userName,
+                currentUri = userImageUri,
+                onSave = { newName, newUri ->
+                    userName = newName
+                    userImageUri = newUri
+
+                    // Nimen tallennus
+                    context.saveName(newName)
+
+                    navController.navigate("Keskustelupalsta") {
+                        popUpTo("Keskustelupalsta") { inclusive = true }
+                    }
                 }
-            })
+            )
         }
     }
 }
 @Composable
-fun ProfileScreen(onBack: () -> Unit) {
-    Surface(
-        modifier = Modifier.fillMaxSize(),
-        color = MaterialTheme.colorScheme.background
-    ) {
+fun ProfileScreen(
+    currentName: String,
+    currentUri: Uri?,
+    onSave: (String, Uri?) -> Unit
+) {
+    var nameInput by remember { mutableStateOf(currentName) }
+    var selectedUri by remember { mutableStateOf(currentUri) }
+    val context = LocalContext.current
+
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) {
+            selectedUri = saveImageToInternalStorage(context, uri)
+        }
+    }
+
+    Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(24.dp),
+            modifier = Modifier.fillMaxSize().padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            Image(
-                painter = painterResource(R.drawable.pentti),
-                contentDescription = "Profile pic",
+            AsyncImage(
+                model = selectedUri ?: R.drawable.avatar,
+                contentDescription = "Profile picture",
                 modifier = Modifier
                     .size(120.dp)
                     .clip(CircleShape)
@@ -110,45 +157,71 @@ fun ProfileScreen(onBack: () -> Unit) {
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            Text(
-                text = "Pentti Ponteva",
-                style = MaterialTheme.typography.headlineLarge,
-                color = MaterialTheme.colorScheme.primary
-            )
+            Button(onClick = {
+                photoPickerLauncher.launch(
+                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                )
+            }) {
+                Text("Select Your photo")
+            }
 
-            Text(
-                text = "Birthdate: 24.12.1945",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.secondary
-            )
-            Text(
-                text = "Status: In retirement",
-                color = MaterialTheme.colorScheme.secondary
+            Spacer(modifier = Modifier.height(16.dp))
+
+            TextField(
+                value = nameInput,
+                onValueChange = { nameInput = it },
+                label = { Text("Insert Your Name") },
+                singleLine = true
             )
 
             Spacer(modifier = Modifier.height(32.dp))
 
-            Button(onClick = onBack) {
-                Text("Back to the messages")
+            Button(onClick = { onSave(nameInput, selectedUri) }) {
+                Text("Save and Return")
             }
         }
     }
 }
+fun saveImageToInternalStorage(context: Context, uri: Uri): Uri? {
+    return try {
+        val inputStream = context.contentResolver.openInputStream(uri)
+        val file = File(context.filesDir, "profile_pic.jpg")
+        val outputStream = FileOutputStream(file)
+
+        inputStream?.use { input ->
+            outputStream.use { output ->
+                input.copyTo(output)
+            }
+        }
+        Uri.fromFile(file)
+    } catch (e: Exception) {
+        e.printStackTrace()
+        null
+    }
+}
 data class Message(val author: String, val body: String, val imageResource: Int)
 @Composable
-fun MessageCard(msg: Message) {
-    // Lisätään paddingia viestiin
+fun MessageCard(msg: Message, customUri: Uri?) {
     Row(modifier = Modifier.padding(all = 8.dp)) {
-        Image(
-            painter = painterResource(msg.imageResource),
-            contentDescription = "Contact profile picture",
-            modifier = Modifier
-                // Kuvan koko 40:een dp
-                .size(40.dp)
-                // Muunnetaan kuvan muoto ympyräksi
-                .clip(CircleShape)
-                .border(1.5.dp, MaterialTheme.colorScheme.primary, CircleShape)
-        )
+        if (customUri != null) {
+            AsyncImage(
+                model = customUri,
+                contentDescription = null,
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .border(1.5.dp, MaterialTheme.colorScheme.primary, CircleShape)
+            )
+        } else {
+            Image(
+                painter = painterResource(msg.imageResource),
+                contentDescription = null,
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .border(1.5.dp, MaterialTheme.colorScheme.primary, CircleShape)
+            )
+        }
 
         Spacer(modifier = Modifier.width(8.dp))
 
@@ -167,24 +240,30 @@ fun MessageCard(msg: Message) {
             Surface(
                 shape = MaterialTheme.shapes.medium,
                 shadowElevation = 1.dp,
-                // surfaceColor color will be changing gradually from primary to surface
                 color = surfaceColor,
-                // animateContentSize will change the Surface size gradually
                 modifier = Modifier.animateContentSize().padding(1.dp)
             ) {
                 Text(
                     text = msg.body,
                     modifier = Modifier.padding(all = 4.dp),
-                    // If the message is expanded, we display all its content
-                    // otherwise we only display the first line
                     maxLines = if (isExpanded) Int.MAX_VALUE else 1,
                     style = MaterialTheme.typography.bodyMedium
                 )
             }
         }
-
     }
-
+}
+@Composable
+fun Conversation(userName: String, userImageUri: Uri?) {
+    LazyColumn {
+        items(SampleData.conversationSample) { message ->
+            if (message.author == "Lexi") {
+                MessageCard(message.copy(author = userName), userImageUri)
+            } else {
+                MessageCard(message, null)
+            }
+        }
+    }
 }
 @Preview(name = "Light Mode")
 @Preview(
@@ -192,14 +271,23 @@ fun MessageCard(msg: Message) {
     showBackground = true,
     name = "Dark Mode"
 )
+@Preview(showBackground = true)
 @Composable
 fun PreviewMessageCard() {
     ComposeTutorialTheme {
         Surface {
             MessageCard(
-                msg = Message("Lexi", "Take a look at Jetpack Compose, it's great!", R.drawable.avatar)
+                msg = Message("Lexi", "Hello!", R.drawable.avatar),
+                customUri = null
             )
         }
+    }
+}
+@Preview(showBackground = true)
+@Composable
+fun PreviewConversation() {
+    ComposeTutorialTheme {
+        Conversation(userName = "Lexi", userImageUri = null)
     }
 }
 object SampleData {
@@ -290,20 +378,4 @@ object SampleData {
         ),
 
     )
-}
-@Composable
-fun Conversation(messages: List<Message>) {
-    LazyColumn {
-        items(messages) { message ->
-            MessageCard(message)
-        }
-    }
-}
-
-@Preview
-@Composable
-fun PreviewConversation() {
-    ComposeTutorialTheme {
-        Conversation(SampleData.conversationSample)
-    }
 }
