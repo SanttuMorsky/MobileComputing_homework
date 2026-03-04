@@ -38,6 +38,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.annotation.OptIn
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.MediaItem
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.PlayerView
 import androidx.core.app.NotificationCompat
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -168,17 +174,23 @@ fun AppNavigation(initialName: String, initialUri: Uri?) {
     NavHost(navController = navController, startDestination = "Keskustelupalsta") {
         //Ensimmäinen tai "pää"näkymä joka on aluksi tehty keskustelupalsta
         composable("Keskustelupalsta") {
+
             Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                 Column(modifier = Modifier.padding(innerPadding)) {
                     Button(
                         onClick = { navController.navigate("Profiili") },
                         modifier = Modifier.padding(16.dp)
                     ) {
-                        Text("Edit Profile")
+                        Text("Open Profile")
                     }
-                    Conversation(userName, userImageUri)
+                    Conversation(userName, userImageUri, onVideoClick = { url -> navController.navigate("Video") })
                 }
             }
+        }
+        composable("Video") {
+            // Esimerkki video, tulevaisuudessa voisi muokata että voi pastettaa minkä vaan video linkin.
+            val sampleVideo = "https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
+            VideoPlayerScreen(videoUrl = sampleVideo)
         }
         // Toinen näkymä - Oma profiili
         composable("Profiili") {
@@ -251,6 +263,31 @@ fun ProfileScreen(
                 label = { Text("Insert Your Name") },
                 singleLine = true
             )
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Button( // Profiilinäkymään nappi josta avata kartta
+                onClick = {
+                    //Koordinaatit oulun yliopistoon jossa käyttäjä tällä hetkellä on
+                    val lat = 65.0593
+                    val lon = 25.4663
+                    val label = "University of Oulu"
+
+                    val gmmIntentUri = Uri.parse("geo:$lat,$lon?q=$lat,$lon($label)")
+
+                    val mapIntent = Intent(Intent.ACTION_VIEW, gmmIntentUri)
+
+                    mapIntent.setPackage("com.google.android.apps.maps")
+
+                    if (mapIntent.resolveActivity(context.packageManager) != null) {
+                        context.startActivity(mapIntent)
+                    } else {
+                        context.startActivity(Intent(Intent.ACTION_VIEW, gmmIntentUri))
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(0.7f)
+            ) {
+                Text("Open Location in Maps")
+            }
 
             Spacer(modifier = Modifier.height(32.dp))
 
@@ -277,7 +314,7 @@ fun saveImageToInternalStorage(context: Context, uri: Uri): Uri? {
         null
     }
 }
-data class Message(val author: String, val body: String, val imageResource: Int)
+data class Message(val author: String, val body: String, val imageResource: Int, val videoUrl: String? = null)
 @Composable
 fun MessageCard(msg: Message, customUri: Uri?) {
     Row(modifier = Modifier.padding(all = 8.dp)) {
@@ -332,16 +369,86 @@ fun MessageCard(msg: Message, customUri: Uri?) {
     }
 }
 @Composable
-fun Conversation(userName: String, userImageUri: Uri?) {
-    LazyColumn {
-        items(SampleData.conversationSample) { message ->
-            if (message.author == "Lexi") {
-                MessageCard(message.copy(author = userName), userImageUri)
-            } else {
-                MessageCard(message, null)
+fun VideoMessageCard(msg: Message, onVideoClick: (String) -> Unit) {
+    Row(modifier = Modifier.padding(all = 8.dp)) {
+        Image(
+            painter = painterResource(msg.imageResource),
+            contentDescription = null,
+            modifier = Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .border(1.5.dp, MaterialTheme.colorScheme.primary, CircleShape)
+        )
+
+        Spacer(modifier = Modifier.width(8.dp))
+
+        Column {
+            Text(
+                text = msg.author,
+                color = MaterialTheme.colorScheme.secondary,
+                style = MaterialTheme.typography.titleSmall
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Surface(
+                shape = MaterialTheme.shapes.medium,
+                color = MaterialTheme.colorScheme.primaryContainer,
+                modifier = Modifier
+                    .clickable { msg.videoUrl?.let { onVideoClick(it) } }
+                    .width(200.dp)
+                    .height(120.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text("📺 Play Video", modifier = Modifier.padding(8.dp))
+                }
             }
         }
     }
+}
+@Composable
+fun Conversation(userName: String, userImageUri: Uri?, onVideoClick: (String) -> Unit) {
+    LazyColumn {
+        items(SampleData.conversationSample) { message ->
+            if (message.videoUrl != null) {
+                VideoMessageCard(message, onVideoClick)
+            } else {
+                if (message.author == "Lexi") {
+                    MessageCard(message.copy(author = userName), userImageUri)
+                } else {
+                    MessageCard(message, null)
+                }
+            }
+        }
+    }
+}
+@OptIn(UnstableApi::class)
+@Composable
+fun VideoPlayerScreen(videoUrl: String) {
+    val context = LocalContext.current
+    val exoPlayer = remember {
+        ExoPlayer.Builder(context).build().apply {
+            val mediaItem = MediaItem.fromUri(videoUrl)
+            setMediaItem(mediaItem)
+            prepare()
+        }
+    }
+
+    // Manage lifecycle: stop player when the composable leaves the screen
+    DisposableEffect(Unit) {
+        onDispose {
+            exoPlayer.release()
+        }
+    }
+
+    // The actual UI component
+    AndroidView(
+        factory = { ctx ->
+            PlayerView(ctx).apply {
+                player = exoPlayer
+            }
+        },
+        modifier = Modifier.fillMaxSize()
+    )
 }
 @Preview(name = "Light Mode")
 @Preview(
@@ -365,7 +472,7 @@ fun PreviewMessageCard() {
 @Composable
 fun PreviewConversation() {
     ComposeTutorialTheme {
-        Conversation(userName = "Lexi", userImageUri = null)
+        Conversation(userName = "Lexi", userImageUri = null, onVideoClick = { /* Do nothing in preview */ })
     }
 }
 object SampleData {
@@ -454,6 +561,38 @@ object SampleData {
             "Have you tried writing build.gradle with KTS?",
             R.drawable.avatar
         ),
-
+        Message(
+            "Matti",
+            "For your shopping trip Pentti here is the shoppinglist: " +
+                    "|Carton of eggs, 2 cans of milk, sixpack of sandels and jalapenos.",
+            R.drawable.matti
+        ),
+        Message(
+            "Tommi",
+            "One thing left out of that I will add that you must remember is the toilet paper!",
+            R.drawable.tommi
+        ),
+        Message(
+            "Matti",
+            "Remember also to print the receipt and take it home so we can pay the groceries in three parts",
+            R.drawable.matti
+        ),
+        Message(
+            "Pentti",
+            "Okay thanks guys! And I sure will remember the receipt no worries! " +
+                    "Looking forward to today evenings ice hockey match",
+            R.drawable.pentti
+        ),
+        Message(
+            "Tommi",
+            "Hey guys check out this cute video my daughter sent me :D",
+            R.drawable.tommi
+        ),
+        Message(
+            "Tommi",
+            "",
+            R.drawable.tommi,
+            videoUrl = "https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
+        )
         )
 }
